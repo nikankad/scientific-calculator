@@ -85,7 +85,7 @@ test('fraction templates in the line editor', async () => {
   const ed = new LineEditor();
   const press = (...as) => as.forEach((a) => ed.put(tokenFor(a)));
   press('frac', '1', '+', '2');
-  assert.equal(ed.fracNav('DOWN'), true);
+  assert.equal(ed.slotNav('DOWN'), true);
   press('3');
   ed.right();
   press('*', '6');
@@ -104,4 +104,31 @@ test('fraction templates in the line editor', async () => {
   const e3 = new LineEditor();
   ['2', 'pow', '3', ')', 'frac', '4'].forEach((a) => e3.put(tokenFor(a)));
   assert.equal(calculate(e3.text()), 2);
+});
+
+test('calculus templates evaluate and navigate', async () => {
+  const { LineEditor } = await import('../site/js/editor.js');
+  const { tokenFor } = await import('../site/js/tokens.js');
+  const { calculate } = await import('../site/js/math/engine.js');
+  const run = (...as) => {
+    const ed = new LineEditor();
+    for (const a of as) {
+      if (a === 'UP' || a === 'DOWN') ed.slotNav(a);
+      else if (a === 'RIGHT') ed.right();
+      else ed.put(tokenFor(a));
+    }
+    return ed;
+  };
+  // ∫ body, then ▼ lower limit, ▲▲ upper limit
+  const ed = run('integ', 'x', 'sq', 'DOWN', '0', 'UP', 'UP', '3');
+  assert.ok(Math.abs(calculate(ed.text(), { vars: {} }) - 9) < 1e-9);
+  assert.equal(calculate(run('sum', 'x', 'DOWN', '1', 'UP', 'UP', '1', '0', '0').text(), { vars: {} }), 5050);
+  assert.equal(calculate(run('prod', 'x', 'RIGHT', '1', 'RIGHT', '5').text(), { vars: {} }), 120);
+  const d = calculate(run('deriv', 'x', 'cube', 'DOWN', '2').text(), { vars: {} });
+  assert.ok(Math.abs(d - 12) < 1e-6);
+  // DEL on an integral keeps its body
+  const e2 = run('integ', 'x', 'sq');
+  e2.cursor = 1;
+  e2.del();
+  assert.equal(e2.text(), 'x²');
 });

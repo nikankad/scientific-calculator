@@ -282,26 +282,29 @@ export class LCD {
     }
   }
 
-  // Natural-display editor: fraction templates are stacked, empty slots show
-  // as dotted boxes, and the line scrolls horizontally to follow the cursor.
+  // Natural-display editor: templates (fraction, ∫, d/dx, Σ, Π) are drawn in
+  // 2D, empty slots show as dotted boxes, and the line scrolls horizontally
+  // to follow the cursor.
   editor2D(ed, x, y, w, { size = 15, lines = 1, cursor = true, color = INK, fracScale = lines > 1 ? 1 : 0.72 } = {}) {
     const toks = ed.tokens;
     let i = 0;
-    const row = (stop) => {
+    const row = (nested) => {
       const items = [];
       while (i < toks.length) {
         const t = toks[i];
-        if (t.k === 'fm' || t.k === 'fc') {
-          if (stop) return { items, end: i };
+        if (t.k === 'ts' || t.k === 'tc') {
+          if (nested) return { items, end: i };
           items.push({ type: 'atom', i, s: '' });
           i++;
-        } else if (t.k === 'fo') {
-          const open = i++;
-          const num = row('fm');
-          if (toks[i]?.k === 'fm') i++;
-          const den = row('fc');
-          if (toks[i]?.k === 'fc') i++;
-          items.push({ type: 'frac', open, num, den });
+        } else if (t.k === 'to') {
+          const it = { type: 'tpl', tpl: t.tpl, open: i++, slots: [] };
+          for (;;) {
+            it.slots.push(row(true));
+            const k = toks[i]?.k;
+            i++;
+            if (k !== 'ts') break;
+          }
+          items.push(it);
         } else {
           items.push({ type: 'atom', i, s: t.d });
           i++;
@@ -309,82 +312,173 @@ export class LCD {
       }
       return { items, end: toks.length };
     };
-    const tree = row(null);
-    const cwAt = (s) => this.width('0', s) ;
-    const minSize = 8;
-    const measureRow = (r, s) => {
+    const tree = row(false);
+    const tw = (str, sz, wt = 500) => this.width(str, sz, wt);
+    const small = (sz) => Math.max(7, sz * (fracScale < 1 ? 0.55 : 0.62));
+    const measureRow = (r, sz) => {
       let rw = 0;
-      let a = s * 0.74;
-      let d = s * 0.2;
+      let a = sz * 0.74;
+      let d = sz * 0.2;
       for (const it of r.items) {
-        const m = it.type === 'atom' ? { w: it.s.length * cwAt(s), a: s * 0.74, d: s * 0.2 } : measureFrac(it, s);
+        const m = it.type === 'atom' ? { w: it.s.length * tw('0', sz), a: sz * 0.74, d: sz * 0.2 } : measureTpl(it, sz);
         it.m = m;
         rw += m.w;
         a = Math.max(a, m.a);
         d = Math.max(d, m.d);
       }
-      if (!r.items.length) rw = cwAt(s) * 0.95;
+      if (!r.items.length) rw = tw('0', sz) * 0.95;
       r.m = { w: rw, a, d };
+      r.size = sz;
       return r.m;
     };
-    const measureFrac = (f, s) => {
-      const cs = Math.max(minSize, s * fracScale);
-      const n = measureRow(f.num, cs);
-      const dd = measureRow(f.den, cs);
-      const axis = s * 0.3;
-      f.cs = cs;
-      return { w: Math.max(n.w, dd.w) + 4, a: axis + 2 + n.d + n.a, d: -axis + 2 + dd.a + dd.d };
+    // Parentheses scaled to the height of what they enclose.
+    const parens = (body, sz) => {
+      const ps = Math.max(sz, (body.a + body.d) / 0.92);
+      return { ps, w: tw('(', ps), b: (body.d - body.a) / 2 + ps * 0.3 };
+    };
+    // Each template gets slot offsets {dx, db} and decorations relative to (0, baseline).
+    const measureTpl = (it, sz) => {
+      const deco = [];
+      const at = [];
+      let w;
+      let a;
+      let d;
+      if (it.tpl === 'frac') {
+        const cs = Math.max(8, sz * fracScale);
+        const [n, dd] = it.slots.map((r) => measureRow(r, cs));
+        const axis = sz * 0.3;
+        w = Math.max(n.w, dd.w) + 4;
+        at.push({ dx: (w - n.w) / 2, db: -axis - 2 - n.d }, { dx: (w - dd.w) / 2, db: -axis + 2 + dd.a });
+        deco.push({ bar: true, x: 1, y: -axis, w: w - 2 });
+        a = axis + 2 + n.d + n.a;
+        d = -axis + 2 + dd.a + dd.d;
+      } else if (it.tpl === 'integ') {
+        const ls = small(sz);
+        const f = measureRow(it.slots[0], sz);
+        const [lo, hi] = [it.slots[1], it.slots[2]].map((r) => measureRow(r, ls));
+        const top = -(Math.max(f.a, sz * 0.8) + 3);
+        const bot = Math.max(f.d, sz * 0.22) + 3;
+        const sw = sz * 0.5;
+        const hiB = top + hi.a * 0.6;
+        const loB = bot + lo.a * 0.45;
+        const lw = Math.max(lo.w, hi.w);
+        const fx = sw + lw + 3;
+        at.push({ dx: fx, db: 0 }, { dx: sw - 1, db: loB }, { dx: sw + 1, db: hiB });
+        deco.push({ integral: true, x: 0, w: sw, top, bot });
+        deco.push({ text: 'dx', x: fx + f.w + 2, b: 0, size: sz });
+        w = fx + f.w + 2 + tw('dx', sz) + 1;
+        a = Math.max(-top + 1, hi.a - hiB);
+        d = Math.max(bot + 1, loB + lo.d);
+      } else if (it.tpl === 'sum' || it.tpl === 'prod') {
+        const ls = small(sz);
+        const f = measureRow(it.slots[0], sz);
+        const [lo, hi] = [it.slots[1], it.slots[2]].map((r) => measureRow(r, ls));
+        const sym = it.tpl === 'sum' ? 'Σ' : 'Π';
+        const ss = sz * 1.3;
+        const symW = tw(sym, ss, 600);
+        const pre = tw('x=', ls);
+        const bw = Math.max(symW, hi.w, pre + lo.w) + 2;
+        const symTop = -ss * 0.72;
+        const hiB = symTop - 2 - hi.d;
+        const loB = 2 + lo.a + 1;
+        const p = parens(f, sz);
+        const lx = (bw - pre - lo.w) / 2;
+        at.push({ dx: bw + 1 + p.w, db: 0 }, { dx: lx + pre, db: loB }, { dx: (bw - hi.w) / 2, db: hiB });
+        deco.push({ text: sym, x: (bw - symW) / 2, b: 0, size: ss, weight: 600 });
+        deco.push({ text: 'x=', x: lx, b: loB, size: ls });
+        deco.push({ text: '(', x: bw + 1, b: p.b, size: p.ps }, { text: ')', x: bw + 1 + p.w + f.w, b: p.b, size: p.ps });
+        w = bw + 1 + 2 * p.w + f.w + 1;
+        a = Math.max(hi.a - hiB, f.a, -symTop);
+        d = Math.max(loB + lo.d, f.d);
+      } else {
+        // deriv: d/dx( f )|x=a
+        const ls = small(sz);
+        const ds = Math.max(8, sz * 0.72);
+        const f = measureRow(it.slots[0], sz);
+        const v = measureRow(it.slots[1], ls);
+        const axis = sz * 0.3;
+        const dw = tw('dx', ds) + 2;
+        const p = parens(f, sz);
+        const fx = dw + 2 + p.w;
+        const barX = fx + f.w + p.w + 2;
+        const top = -Math.max(f.a, sz * 0.8);
+        const vb = Math.max(f.d, sz * 0.2) + v.a * 0.5;
+        const pre = tw('x=', ls);
+        deco.push({ text: 'd', x: (dw - tw('d', ds)) / 2, b: -axis - 2 - ds * 0.2, size: ds });
+        deco.push({ bar: true, x: 0, y: -axis, w: dw });
+        deco.push({ text: 'dx', x: 1, b: -axis + 2 + ds * 0.74, size: ds });
+        deco.push({ text: '(', x: dw + 2, b: p.b, size: p.ps }, { text: ')', x: fx + f.w, b: p.b, size: p.ps });
+        deco.push({ vline: true, x: barX, y1: top - 1, y2: vb + 1 });
+        deco.push({ text: 'x=', x: barX + 2, b: vb, size: ls });
+        at.push({ dx: fx, db: 0 }, { dx: barX + 2 + pre, db: vb });
+        w = barX + 2 + pre + v.w + 1;
+        a = Math.max(f.a, axis + 2 + ds * 0.94, -top + 1);
+        d = Math.max(f.d, -axis + 2 + ds * 0.94, vb + v.d);
+      }
+      it.at = at;
+      it.deco = deco;
+      return { w, a, d };
     };
     const top = measureRow(tree, size);
     const base = lines > 1 ? Math.max(y, y - size * 0.85 + top.a) : y;
-    // Positions for every cursor index.
+    // Cursor positions for every token index, plus draw operations.
     const pos = [];
     const ops = [];
-    const placeRow = (r, px, b, s) => {
-      if (!r.items.length) ops.push({ box: true, x: px + 0.5, b, s, w: r.m.w - 1 });
+    const placeRow = (r, px, b) => {
+      const sz = r.size;
+      if (!r.items.length) ops.push({ box: true, x: px + 0.5, b, s: sz, w: r.m.w - 1 });
       let cx = px;
       for (const it of r.items) {
         if (it.type === 'atom') {
-          pos[it.i] = { x: cx, b, s };
-          if (it.s) ops.push({ text: it.s, x: cx, b, s });
+          pos[it.i] = { x: cx, b, s: sz };
+          if (it.s) ops.push({ text: it.s, x: cx, b, size: sz });
         } else {
-          pos[it.open] = { x: cx, b, s };
-          const axis = b - s * 0.3;
-          const nx = cx + (it.m.w - it.num.m.w) / 2;
-          const dx = cx + (it.m.w - it.den.m.w) / 2;
-          ops.push({ bar: true, x: cx + 1, y: axis, w: it.m.w - 2 });
-          placeRow(it.num, nx, axis - 2 - it.num.m.d, it.cs);
-          placeRow(it.den, dx, axis + 2 + it.den.m.a, it.cs);
+          pos[it.open] = { x: cx, b, s: sz };
+          for (const dc of it.deco) ops.push({ ...dc, x: cx + dc.x, b: dc.b === undefined ? undefined : b + dc.b, y: dc.y === undefined ? undefined : b + dc.y, top: b + (dc.top ?? 0), bot: b + (dc.bot ?? 0), y1: b + (dc.y1 ?? 0), y2: b + (dc.y2 ?? 0) });
+          it.slots.forEach((slot, k) => placeRow(slot, cx + it.at[k].dx, b + it.at[k].db));
         }
         cx += it.m.w;
       }
-      pos[r.end] = { x: r.items.length ? cx : px, b, s };
+      pos[r.end] = { x: r.items.length ? cx : px, b, s: sz };
     };
-    placeRow(tree, 0, base, size);
+    placeRow(tree, 0, base);
     const cur = pos[ed.cursor] || pos[toks.length];
-    const cw = cwAt(size);
+    const cw = tw('0', size);
     let hscroll = ed.hscroll || 0;
     if (cur.x - hscroll > w - cw) hscroll = cur.x - w + cw;
     if (cur.x - hscroll < 0) hscroll = Math.max(0, cur.x - cw * 2);
     if (top.w <= w) hscroll = 0;
     ed.hscroll = hscroll;
-    const clipTop = base - top.a - 2;
-    this.clip(x - 1, clipTop, w + 3, top.a + top.d + 5, () => {
+    const c = this.ctx;
+    this.clip(x - 1, base - top.a - 2, w + 3, top.a + top.d + 5, () => {
       for (const op of ops) {
         const ox = x + op.x - hscroll;
-        if (op.text) this.text(op.text, ox, op.b, { size: op.s, color });
+        if (op.text) this.text(op.text, ox, op.b, { size: op.size, weight: op.weight, color });
         else if (op.bar) this.fill(ox, op.y - 0.6, op.w, 1.2, color);
-        else if (op.box) {
+        else if (op.vline) this.line(ox, op.y1, ox, op.y2, 1, null, color);
+        else if (op.integral) {
+          const sw = op.w;
+          c.strokeStyle = color;
+          c.lineWidth = 1.4;
+          c.lineCap = 'round';
+          c.beginPath();
+          c.moveTo(ox + sw * 0.95, op.top + 2.2);
+          c.bezierCurveTo(ox + sw * 0.85, op.top - 0.6, ox + sw * 0.55, op.top - 0.6, ox + sw * 0.52, op.top + 4);
+          c.lineTo(ox + sw * 0.48, op.bot - 4);
+          c.bezierCurveTo(ox + sw * 0.45, op.bot + 0.6, ox + sw * 0.15, op.bot + 0.6, ox + sw * 0.05, op.bot - 2.2);
+          c.stroke();
+          c.lineCap = 'butt';
+        } else if (op.box) {
           const h = op.s * 0.78;
-          this.ctx.setLineDash([1, 1]);
+          c.setLineDash([1, 1]);
           this.box(ox, op.b - h, Math.max(3, op.w), h, 0.9, color);
-          this.ctx.setLineDash([]);
+          c.setLineDash([]);
         }
       }
       if (cursor) {
         const px = x + cur.x - hscroll;
         if (ed.insert) this.fill(px - 0.5, cur.b - cur.s * 0.82, 1.6, cur.s * 1.0, color);
-        else this.fill(px, cur.b + 2, cwAt(cur.s), 1.8, color);
+        else this.fill(px, cur.b + 2, tw('0', cur.s), 1.8, color);
       }
     });
     if (hscroll > 0) this.tri(x - 3, base - size * 0.3, 2.5, 'left');

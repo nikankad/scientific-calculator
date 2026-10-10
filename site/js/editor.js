@@ -1,11 +1,38 @@
 // Token-based line editor. Each token has a canonical text `t` (fed to the
 // parser) and a display string `d`, so DEL removes "sin(" as one unit.
-// Fractions are templates made of three structural tokens (k = fo/fm/fc)
-// that the LCD draws as a stacked numerator over denominator.
+// Natural-display templates (fraction, ∫, d/dx, Σ, Π) are made of structural
+// tokens: an opener (k = 'to'), slot separators ('ts') and a closer ('tc').
+// The LCD draws them in 2D; the parser sees fully parenthesised arguments.
 
-export const FRAC_OPEN = { t: '((', d: '(', k: 'fo' };
-export const FRAC_MID = { t: ')⁄(', d: ')/(', k: 'fm' };
-export const FRAC_CLOSE = { t: '))', d: ')', k: 'fc' };
+// Slot order is the argument order of the underlying function.
+export const TEMPLATES = {
+  frac: { open: '((', seps: [')⁄('], close: '))', lin: ['(', ')/(', ')'] },
+  integ: { open: 'integ((', seps: ['),(', '),('], close: '))', lin: ['∫(', ',', ',', ')'] },
+  deriv: { open: 'deriv((', seps: ['),('], close: '))', lin: ['d/dx(', ',', ')'] },
+  sum: { open: 'sum((', seps: ['),(', '),('], close: '))', lin: ['Σ(', ',', ',', ')'] },
+  prod: { open: 'prod((', seps: ['),(', '),('], close: '))', lin: ['Π(', ',', ',', ')'] },
+};
+
+// ▲/▼ targets per slot. ∫/Σ/Π slots are [body, lower, upper].
+const NAV = {
+  frac: [{ DOWN: 1 }, { UP: 0 }],
+  integ: [{ UP: 2, DOWN: 1 }, { UP: 0 }, { DOWN: 0 }],
+  sum: [{ UP: 2, DOWN: 1 }, { UP: 0 }, { DOWN: 0 }],
+  prod: [{ UP: 2, DOWN: 1 }, { UP: 0 }, { DOWN: 0 }],
+  deriv: [{ DOWN: 1 }, { UP: 0 }],
+};
+
+export function templateTokens(name) {
+  const T = TEMPLATES[name];
+  return [
+    { t: T.open, d: T.lin[0], k: 'to', tpl: name },
+    ...T.seps.map((t, i) => ({ t, d: T.lin[i + 1], k: 'ts' })),
+    { t: T.close, d: T.lin[T.lin.length - 1], k: 'tc' },
+  ];
+}
+
+// Tokens saved by the first fraction release used fo/fm/fc.
+const LEGACY = { fo: { k: 'to', tpl: 'frac' }, fm: { k: 'ts' }, fc: { k: 'tc' } };
 
 const POSTFIX = new Set(['²', '³', '⁻¹', '!', '%', '°', 'ʳ', 'ᵍ']);
 const DIGIT = /^[0-9.ᴇ]$/;
@@ -13,7 +40,7 @@ const OPERAND = /^(Ans|Ran#|[A-FMXYxnπℯ]|\[.*\]|\{.*\})$/;
 
 export class LineEditor {
   constructor(tokens = []) {
-    this.tokens = tokens.map((t) => ({ ...t }));
+    this.tokens = tokens.map((t) => ({ ...t, ...(LEGACY[t.k] || {}) }));
     this.cursor = this.tokens.length;
     this.insert = true;
     this.history = [];
@@ -36,8 +63,8 @@ export class LineEditor {
   }
 
   put(tok) {
-    if (tok.frac) {
-      this.insertFraction();
+    if (tok.tpl) {
+      this.insertTemplate(tok.tpl);
       return;
     }
     this.snapshot();
@@ -52,28 +79,39 @@ export class LineEditor {
     const idx = atCursor ? this.cursor : this.cursor - 1;
     this.snapshot();
     if (this.tokens[idx].k) {
-      // Removing any part of a fraction removes the template, keeping its contents.
-      const [o, m, c] = this.group(idx);
-      const removedBefore = [o, m, c].filter((j) => j >= 0 && j < idx).length;
-      [c, m, o].filter((j) => j >= 0).forEach((j) => this.tokens.splice(j, 1));
-      this.cursor = idx - removedBefore;
+      // Removing part of a template removes the template. A fraction keeps
+      // all of its contents; ∫, d/dx, Σ, Π keep their body.
+      const g = this.group(idx);
+      const o = g[0];
+      if (this.tokens[o].tpl === 'frac') {
+        const removedBefore = g.filter((j) => j < idx).length;
+        [...g].reverse().forEach((j) => this.tokens.splice(j, 1));
+        this.cursor = idx - removedBefore;
+      } else {
+        const close = g[g.length - 1];
+        const bodyEnd = g[1];
+        this.tokens.splice(bodyEnd, close - bodyEnd + 1);
+        this.tokens.splice(o, 1);
+        this.cursor = bodyEnd - 1;
+      }
       return;
     }
     this.tokens.splice(idx, 1);
     this.cursor = idx;
   }
 
-  // Wrap the operand before the cursor as the numerator (cursor goes to the
-  // denominator), or insert an empty template with the cursor in the numerator.
-  insertFraction() {
+  // A fraction wraps the operand before the cursor as its numerator (cursor
+  // goes to the denominator); otherwise the cursor lands in the first slot.
+  insertTemplate(name) {
     this.snapshot();
-    const start = this.operandStart(this.cursor);
+    const [open, ...rest] = templateTokens(name);
+    const start = name === 'frac' ? this.operandStart(this.cursor) : this.cursor;
     if (start < this.cursor) {
       const num = this.tokens.slice(start, this.cursor);
-      this.tokens.splice(start, num.length, { ...FRAC_OPEN }, ...num, { ...FRAC_MID }, { ...FRAC_CLOSE });
+      this.tokens.splice(start, num.length, open, ...num, ...rest);
       this.cursor = start + num.length + 2;
     } else {
-      this.tokens.splice(this.cursor, 0, { ...FRAC_OPEN }, { ...FRAC_MID }, { ...FRAC_CLOSE });
+      this.tokens.splice(this.cursor, 0, open, ...rest);
       this.cursor += 1;
     }
   }
@@ -89,12 +127,12 @@ export class LineEditor {
       return i;
     }
     if (OPERAND.test(t.t)) return i - 1;
-    if (t.t === ')' || t.k === 'fc') {
+    if (t.t === ')' || t.k === 'tc') {
       let depth = 0;
       for (let j = i - 1; j >= 0; j--) {
         const tj = toks[j];
-        if (tj.k === 'fm') continue;
-        if (tj.t === ')' || tj.k === 'fc') depth++;
+        if (tj.k === 'ts') continue;
+        if (tj.t === ')' || tj.k === 'tc') depth++;
         else if (tj.t.endsWith('(')) {
           depth--;
           if (depth === 0) return tj.t === '^(' ? this.operandStart(j) : j;
@@ -104,15 +142,15 @@ export class LineEditor {
     return end;
   }
 
-  // Indices [open, mid, close] of the fraction that structural token idx belongs to.
+  // Indices [open, ...separators, close] of the template that structural token idx belongs to.
   group(idx) {
     const toks = this.tokens;
     let o = idx;
-    if (toks[idx].k !== 'fo') {
+    if (toks[idx].k !== 'to') {
       let depth = 0;
       for (let j = idx - 1; j >= 0; j--) {
-        if (toks[j].k === 'fc') depth++;
-        else if (toks[j].k === 'fo') {
+        if (toks[j].k === 'tc') depth++;
+        else if (toks[j].k === 'to') {
           if (depth === 0) {
             o = j;
             break;
@@ -121,40 +159,37 @@ export class LineEditor {
         }
       }
     }
-    let m = -1;
-    let c = -1;
+    const out = [o];
     let depth = 0;
     for (let j = o + 1; j < toks.length; j++) {
       const k = toks[j].k;
-      if (k === 'fo') depth++;
-      else if (k === 'fc') {
+      if (k === 'to') depth++;
+      else if (k === 'tc') {
         if (depth === 0) {
-          c = j;
+          out.push(j);
           break;
         }
         depth--;
-      } else if (k === 'fm' && depth === 0) m = j;
+      } else if (k === 'ts' && depth === 0) out.push(j);
     }
-    return [o, m, c];
+    return out;
   }
 
-  // ▲/▼ inside a fraction: jump between numerator and denominator.
-  fracNav(dir) {
+  // ▲/▼ inside a template: jump between its slots.
+  slotNav(dir) {
     const stack = [];
     for (let j = 0; j < this.cursor; j++) {
       const k = this.tokens[j].k;
-      if (k === 'fo') stack.push({ o: j, den: false });
-      else if (k === 'fm' && stack.length) stack[stack.length - 1].den = true;
-      else if (k === 'fc') stack.pop();
+      if (k === 'to') stack.push({ o: j, slot: 0 });
+      else if (k === 'ts' && stack.length) stack[stack.length - 1].slot++;
+      else if (k === 'tc') stack.pop();
     }
-    const top = stack[stack.length - 1];
-    if (!top) return false;
-    if (dir === 'DOWN' && !top.den) {
-      this.cursor = this.group(top.o)[1] + 1;
-      return true;
-    }
-    if (dir === 'UP' && top.den) {
-      this.cursor = top.o + 1;
+    for (let s = stack.length - 1; s >= 0; s--) {
+      const { o, slot } = stack[s];
+      const target = NAV[this.tokens[o].tpl]?.[slot]?.[dir];
+      if (target === undefined) continue;
+      const g = this.group(o);
+      this.cursor = g[target] + 1;
       return true;
     }
     return false;

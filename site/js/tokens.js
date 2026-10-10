@@ -4,7 +4,7 @@ const tk = (t, d = t) => ({ t, d });
 
 export const TOKENS = {
   '.': tk('.'), '+': tk('+'), '-': tk('-', '−'), '*': tk('*', '×'), '/': tk('/', '÷'),
-  frac: { t: '', d: '', frac: true }, neg: tk('-', '-'), '(': tk('('), ')': tk(')'), ',': tk(','), ':': tk(':'), eqsign: tk('='),
+  frac: { t: '', d: '', tpl: 'frac' }, neg: tk('-', '-'), '(': tk('('), ')': tk(')'), ',': tk(','), ':': tk(':'), eqsign: tk('='),
   sq: tk('²'), cube: tk('³'), inv: tk('⁻¹'), fact: tk('!'), pct: tk('%'),
   dms: tk('°'), degm: tk('°'), radm: tk('ʳ'), gradm: tk('ᵍ'),
   pow: tk('^('), sqrt: tk('sqrt(', '√('), cbrt: tk('cbrt(', '∛('), root: tk('root(', 'ˣ√('),
@@ -15,7 +15,7 @@ export const TOKENS = {
   asinh: tk('asinh(', 'sinh⁻¹('), acosh: tk('acosh(', 'cosh⁻¹('), atanh: tk('atanh(', 'tanh⁻¹('),
   Abs: tk('abs(', 'Abs('), Pol: tk('Pol('), Rec: tk('Rec('), Int: tk('Int('), Intg: tk('Intg('),
   RanInt: tk('RanInt('), GCD: tk('GCD('), LCM: tk('LCM('), Rnd: tk('Rnd('), RndFix: tk('RndFix('),
-  integ: tk('integ(', '∫('), deriv: tk('deriv(', 'd/dx('), sum: tk('sum(', 'Σ('), prod: tk('prod(', 'Π('),
+  integ: { t: '', d: '', tpl: 'integ' }, deriv: { t: '', d: '', tpl: 'deriv' }, sum: { t: '', d: '', tpl: 'sum' }, prod: { t: '', d: '', tpl: 'prod' },
   nPr: tk('nPr', 'P'), nCr: tk('nCr', 'C'), divR: tk('÷R'),
   x: tk('x'), pi: tk('π'), e: tk('ℯ', 'e'), 'Ran#': tk('Ran#'), Ans: tk('Ans'), exp10: tk('ᴇ'),
 };
