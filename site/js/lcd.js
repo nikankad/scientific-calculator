@@ -224,7 +224,12 @@ export class LCD {
 
   // Draw a LineEditor in a box, wrapping over `lines` rows (or scrolling
   // horizontally when lines = 1) and keeping the cursor visible.
-  editor(ed, x, y, w, { size = 15, lines = 1, cursor = true, lineH = Math.round(size * 1.3), color = INK } = {}) {
+  editor(ed, x, y, w, opts = {}) {
+    if (ed.tokens.some((t) => t.k)) return this.editor2D(ed, x, y, w, opts);
+    return this.editorLinear(ed, x, y, w, opts);
+  }
+
+  editorLinear(ed, x, y, w, { size = 15, lines = 1, cursor = true, lineH = Math.round(size * 1.3), color = INK } = {}) {
     this.font(size);
     const cw = this.ctx.measureText('0').width;
     const items = [];
@@ -275,5 +280,114 @@ export class LCD {
       if (hscroll > 0) this.tri(x - 3, y - size * 0.3, 2.5, 'left');
       if (endPos.x - hscroll > w + 1) this.tri(x + w + 3, y - size * 0.3, 2.5, 'right');
     }
+  }
+
+  // Natural-display editor: fraction templates are stacked, empty slots show
+  // as dotted boxes, and the line scrolls horizontally to follow the cursor.
+  editor2D(ed, x, y, w, { size = 15, lines = 1, cursor = true, color = INK, fracScale = lines > 1 ? 1 : 0.72 } = {}) {
+    const toks = ed.tokens;
+    let i = 0;
+    const row = (stop) => {
+      const items = [];
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t.k === 'fm' || t.k === 'fc') {
+          if (stop) return { items, end: i };
+          items.push({ type: 'atom', i, s: '' });
+          i++;
+        } else if (t.k === 'fo') {
+          const open = i++;
+          const num = row('fm');
+          if (toks[i]?.k === 'fm') i++;
+          const den = row('fc');
+          if (toks[i]?.k === 'fc') i++;
+          items.push({ type: 'frac', open, num, den });
+        } else {
+          items.push({ type: 'atom', i, s: t.d });
+          i++;
+        }
+      }
+      return { items, end: toks.length };
+    };
+    const tree = row(null);
+    const cwAt = (s) => this.width('0', s) ;
+    const minSize = 8;
+    const measureRow = (r, s) => {
+      let rw = 0;
+      let a = s * 0.74;
+      let d = s * 0.2;
+      for (const it of r.items) {
+        const m = it.type === 'atom' ? { w: it.s.length * cwAt(s), a: s * 0.74, d: s * 0.2 } : measureFrac(it, s);
+        it.m = m;
+        rw += m.w;
+        a = Math.max(a, m.a);
+        d = Math.max(d, m.d);
+      }
+      if (!r.items.length) rw = cwAt(s) * 0.95;
+      r.m = { w: rw, a, d };
+      return r.m;
+    };
+    const measureFrac = (f, s) => {
+      const cs = Math.max(minSize, s * fracScale);
+      const n = measureRow(f.num, cs);
+      const dd = measureRow(f.den, cs);
+      const axis = s * 0.3;
+      f.cs = cs;
+      return { w: Math.max(n.w, dd.w) + 4, a: axis + 2 + n.d + n.a, d: -axis + 2 + dd.a + dd.d };
+    };
+    const top = measureRow(tree, size);
+    const base = lines > 1 ? Math.max(y, y - size * 0.85 + top.a) : y;
+    // Positions for every cursor index.
+    const pos = [];
+    const ops = [];
+    const placeRow = (r, px, b, s) => {
+      if (!r.items.length) ops.push({ box: true, x: px + 0.5, b, s, w: r.m.w - 1 });
+      let cx = px;
+      for (const it of r.items) {
+        if (it.type === 'atom') {
+          pos[it.i] = { x: cx, b, s };
+          if (it.s) ops.push({ text: it.s, x: cx, b, s });
+        } else {
+          pos[it.open] = { x: cx, b, s };
+          const axis = b - s * 0.3;
+          const nx = cx + (it.m.w - it.num.m.w) / 2;
+          const dx = cx + (it.m.w - it.den.m.w) / 2;
+          ops.push({ bar: true, x: cx + 1, y: axis, w: it.m.w - 2 });
+          placeRow(it.num, nx, axis - 2 - it.num.m.d, it.cs);
+          placeRow(it.den, dx, axis + 2 + it.den.m.a, it.cs);
+        }
+        cx += it.m.w;
+      }
+      pos[r.end] = { x: r.items.length ? cx : px, b, s };
+    };
+    placeRow(tree, 0, base, size);
+    const cur = pos[ed.cursor] || pos[toks.length];
+    const cw = cwAt(size);
+    let hscroll = ed.hscroll || 0;
+    if (cur.x - hscroll > w - cw) hscroll = cur.x - w + cw;
+    if (cur.x - hscroll < 0) hscroll = Math.max(0, cur.x - cw * 2);
+    if (top.w <= w) hscroll = 0;
+    ed.hscroll = hscroll;
+    const clipTop = base - top.a - 2;
+    this.clip(x - 1, clipTop, w + 3, top.a + top.d + 5, () => {
+      for (const op of ops) {
+        const ox = x + op.x - hscroll;
+        if (op.text) this.text(op.text, ox, op.b, { size: op.s, color });
+        else if (op.bar) this.fill(ox, op.y - 0.6, op.w, 1.2, color);
+        else if (op.box) {
+          const h = op.s * 0.78;
+          this.ctx.setLineDash([1, 1]);
+          this.box(ox, op.b - h, Math.max(3, op.w), h, 0.9, color);
+          this.ctx.setLineDash([]);
+        }
+      }
+      if (cursor) {
+        const px = x + cur.x - hscroll;
+        if (ed.insert) this.fill(px - 0.5, cur.b - cur.s * 0.82, 1.6, cur.s * 1.0, color);
+        else this.fill(px, cur.b + 2, cwAt(cur.s), 1.8, color);
+      }
+    });
+    if (hscroll > 0) this.tri(x - 3, base - size * 0.3, 2.5, 'left');
+    if (top.w - hscroll > w + 1) this.tri(x + w + 3, base - size * 0.3, 2.5, 'right');
   }
 }

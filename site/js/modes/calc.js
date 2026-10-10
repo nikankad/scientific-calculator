@@ -103,6 +103,7 @@ export class CalcMode {
         return;
       case 'UP':
       case 'DOWN':
+        if (!this.result && this.ed.fracNav(a)) return;
         return this.historyNav(a);
       case 'SD':
         return this.toggleSD();

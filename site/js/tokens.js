@@ -4,7 +4,7 @@ const tk = (t, d = t) => ({ t, d });
 
 export const TOKENS = {
   '.': tk('.'), '+': tk('+'), '-': tk('-', '−'), '*': tk('*', '×'), '/': tk('/', '÷'),
-  frac: tk('⁄', '/'), neg: tk('-', '-'), '(': tk('('), ')': tk(')'), ',': tk(','), ':': tk(':'), eqsign: tk('='),
+  frac: { t: '', d: '', frac: true }, neg: tk('-', '-'), '(': tk('('), ')': tk(')'), ',': tk(','), ':': tk(':'), eqsign: tk('='),
   sq: tk('²'), cube: tk('³'), inv: tk('⁻¹'), fact: tk('!'), pct: tk('%'),
   dms: tk('°'), degm: tk('°'), radm: tk('ʳ'), gradm: tk('ᵍ'),
   pow: tk('^('), sqrt: tk('sqrt(', '√('), cbrt: tk('cbrt(', '∛('), root: tk('root(', 'ˣ√('),

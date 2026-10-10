@@ -77,3 +77,31 @@ test('base-n', () => {
   assert.throws(() => evalBaseN('12', 2), (e) => e.kind === 'Syntax');
   assert.throws(() => evalBaseN('1/0', 10), (e) => e.kind === 'Math');
 });
+
+test('fraction templates in the line editor', async () => {
+  const { LineEditor } = await import('../site/js/editor.js');
+  const { tokenFor } = await import('../site/js/tokens.js');
+  const { calculate } = await import('../site/js/math/engine.js');
+  const ed = new LineEditor();
+  const press = (...as) => as.forEach((a) => ed.put(tokenFor(a)));
+  press('frac', '1', '+', '2');
+  assert.equal(ed.fracNav('DOWN'), true);
+  press('3');
+  ed.right();
+  press('*', '6');
+  assert.equal(calculate(ed.text()), 6);
+  // a number typed first becomes the numerator; cursor lands in the denominator
+  const e2 = new LineEditor();
+  e2.put(tokenFor('7'));
+  e2.put(tokenFor('frac'));
+  e2.put(tokenFor('2'));
+  assert.equal(calculate(e2.text()), 3.5);
+  // DEL on the template keeps the contents
+  e2.cursor = 1;
+  e2.del();
+  assert.equal(e2.text(), '72');
+  // 2^(3) then fraction takes the whole power as numerator
+  const e3 = new LineEditor();
+  ['2', 'pow', '3', ')', 'frac', '4'].forEach((a) => e3.put(tokenFor(a)));
+  assert.equal(calculate(e3.text()), 2);
+});
