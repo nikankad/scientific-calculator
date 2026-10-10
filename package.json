@@ -1,31 +1,11 @@
 {
-  "name": "scientific-calc",
+  "name": "scientific-calculator",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
+  "description": "A ClassWiz-style scientific graphing calculator with algorithms and Big-O modes.",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@radix-ui/react-dialog": "latest",
-    "@radix-ui/react-separator": "latest",
-    "@radix-ui/react-slot": "latest",
-    "@tailwindcss/vite": "latest",
-    "@vitejs/plugin-react": "latest",
-    "class-variance-authority": "latest",
-    "clsx": "latest",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "tailwind-merge": "latest",
-    "tailwindcss": "latest",
-    "vite": "latest"
-  },
-  "devDependencies": {
-    "playwright": "^1.63.0",
-    "vitest": "latest"
+    "start": "python3 -m http.server 8080 --directory site",
+    "test": "node --test tests/*.test.js"
   }
 }
